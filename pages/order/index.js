@@ -182,7 +182,13 @@ export default {
 		},
 		// 获取用户送餐期望时间
 		async getEstimatedDeliveryTime() {
-			const result = await getEstimatedDeliveryTime({ shopId: this.shopInfo().shopId, customerAddress: this.address });
+			const shopInfo = this.shopInfo() || {}
+			const shopId = shopInfo.shopId || 'f3deb'
+			const result = await getEstimatedDeliveryTime({
+				shopId,
+				customerAddress: this.address,
+				__mock: true,
+			});
 			this.arrivalTime = dayjs(result.data).format('HH:mm')
 			this.orderTime = result.data
 		},
@@ -294,8 +300,8 @@ export default {
 				tablewareNumber: this.num,
 				packAmount: this.orderDishNumber,
 				amount: this.orderDishPrice,
-				shopId: this.shopInfo().shopId,
-				deliveryFee: this.deliveryFee()
+				shopId: (this.shopInfo() || {}).shopId || 'f3deb',
+				deliveryFee: this.deliveryFee(),
 			}
 
 			submitOrderSubmit(params).then(res => {

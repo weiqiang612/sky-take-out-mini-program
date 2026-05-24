@@ -1,5 +1,39 @@
 import { request } from "../../utils/request.js"
 
+const MOCK_ORDER_DELAY_MINUTES = 45
+
+const pad2 = (value) => {
+	const num = Number(value)
+	return num < 10 ? `0${num}` : `${num}`
+}
+
+const buildMockDateTime = (date = new Date()) => {
+	const year = date.getFullYear()
+	const month = pad2(date.getMonth() + 1)
+	const day = pad2(date.getDate())
+	const hour = pad2(date.getHours())
+	const minute = pad2(date.getMinutes())
+	const second = pad2(date.getSeconds())
+	return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
+
+const buildMockEstimatedDeliveryTime = () => {
+	const date = new Date()
+	date.setMinutes(date.getMinutes() + MOCK_ORDER_DELAY_MINUTES)
+	return buildMockDateTime(date)
+}
+
+const buildMockOrderNumber = () => `MOCK${Date.now()}`
+
+const buildMockOrderSubmit = (params = {}) => ({
+	id: Date.now(),
+	orderAmount: params.amount || 0,
+	orderNumber: buildMockOrderNumber(),
+	orderTime: buildMockDateTime(),
+})
+
+const mockSuccess = (data) => Promise.resolve({ code: 1, data })
+
 // 开桌
 export const openTable = (params) =>
 	request({
@@ -353,11 +387,13 @@ export const repetitionOrder = (params) =>
 
 // 获取用户送餐期望时间
 export const getEstimatedDeliveryTime = (params) =>
-	request({
-		url: `/user/order/getEstimatedDeliveryTime`,
-		method: 'get',
-		params
-	})
+	params && params.__mock
+		? mockSuccess(buildMockEstimatedDeliveryTime())
+		: request({
+			url: `/user/order/getEstimatedDeliveryTime`,
+			method: 'get',
+			params
+		})
 // 查询用户订单支付状态列表信息
 export const queryOrdersCheckStatus = (params) =>
 	request({
@@ -365,5 +401,3 @@ export const queryOrdersCheckStatus = (params) =>
 		method: 'get',
 		params
 	})
-
-

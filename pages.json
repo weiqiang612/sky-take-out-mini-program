@@ -75,6 +75,15 @@
       }
     },
     {
+      "path": "pages/memory/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "用户记忆",
+        "enablePullDownRefresh": false,
+        "navigationBarBackgroundColor": "#e95f3c"
+      }
+    },
+    {
       "path": "pages/addOrEditAddress/addOrEditAddress",
       "style": {
         "navigationStyle": "custom",

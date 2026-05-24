@@ -17,7 +17,7 @@
           <view class="bubble agent">
             <mp-html
               class="agent-markdown"
-              :content="renderMarkdown('你好，我是苍穹管家 AI 助手，可以帮你查询订单状态、取消订单、申请退款等。有需要就直接告诉我吧。')"
+              :content="renderMarkdown('你好，我是苍穹管家 AI 助手，可以帮你查询订单状态、取消订单、申请退款、推荐菜品等。有需要就直接告诉我吧。')"
               :markdown="true"
               :scroll-table="true"
               :tag-style="agentMarkdownTagStyle"
@@ -32,7 +32,7 @@
           <text class="ts">{{ msg.time }}</text>
         </view>
 
-        <view v-else class="msg agent">
+        <view v-else-if="msg.role === 'agent'" class="msg agent">
           <view class="bubble agent">
             <mp-html
               class="agent-markdown"
@@ -44,6 +44,10 @@
           </view>
           <text v-if="msg.intent" class="badge">AI {{ msg.intent }}</text>
           <text class="ts">{{ msg.time }}</text>
+        </view>
+
+        <view v-else-if="msg.role === 'system'" class="msg system">
+          <text class="system-msg">{{ msg.content }}</text>
         </view>
       </block>
 
@@ -72,6 +76,12 @@
     </scroll-view>
 
     <view v-if="!pendingConfirmation" class="input-area">
+      <view class="new-chat-btn" @tap="startNewConversation">
+        <uni-icons class="new-chat-btn__icon" type="compose" size="20" color="#e95f3c" />
+      </view>
+      <view class="memory-btn" @tap="goMemoryManage">
+        <text class="memory-btn__text">记忆</text>
+      </view>
       <textarea
         class="chat-input"
         :value="inputValue"
@@ -95,6 +105,7 @@
 import { mapMutations } from 'vuex'
 import { userLogin } from '../api/api.js'
 import { agentWsUrl } from '../../utils/env'
+import uniIcons from '../../components/uni-icons/uni-icons'
 import mpHtml from '../../uni_modules/mp-html/components/mp-html/mp-html'
 
 const agentMarkdownTagStyle = {
@@ -118,6 +129,16 @@ const agentMarkdownTagStyle = {
   img: 'display: block; max-width: 100%; border-radius: 12rpx;',
 }
 
+const SYSTEM_MESSAGES = {
+  cancel_order: { cancel: '已放弃取消订单', confirm: '已确认取消订单，正在处理...' },
+  request_refund: { cancel: '已放弃退款申请', confirm: '已确认退款申请，正在处理...' },
+  change_address: { cancel: '已放弃修改地址', confirm: '已确认修改地址，正在处理...' },
+  report_missing_item: { cancel: '已放弃申报缺漏商品', confirm: '已确认申报缺漏商品，正在处理...' },
+}
+
+const AGENT_CONVERSATION_STORAGE_KEY = 'agent_conversation_state_v1'
+const MAX_STORED_MESSAGES = 100
+
 function normalizeMarkdownContent(content) {
   return String(content == null ? '' : content)
     .replace(/\r\n/g, '\n')
@@ -129,6 +150,14 @@ function createConversationId() {
     const r = Math.random() * 16 | 0
     return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
   })
+}
+
+function createConversationState(conversationId) {
+  return {
+    conversationId: conversationId || createConversationId(),
+    messages: [],
+    updatedAt: Date.now(),
+  }
 }
 
 function decodeBase64Url(input) {
@@ -244,9 +273,47 @@ function formatTime(timestamp) {
   return h + ':' + m
 }
 
+function intentLabel(intentValue) {
+  const labels = {
+    cancel_order: '取消订单',
+    request_refund: '申请退款',
+    order_status: '查询订单',
+    track_delivery: '查询配送',
+    reorder: '再来一单',
+    report_missing_item: '申报缺漏',
+    change_address: '修改地址',
+    address_management: '地址管理',
+    menu_query: '菜品查询',
+    cart_management: '购物车管理',
+    shop_status: '门店状态',
+    escalate_to_human: '转人工',
+    faq: '咨询',
+    other: '其他',
+  }
+  return labels[intentValue] || intentValue
+}
+
+function normalizeStoredMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return []
+  }
+
+  return messages
+    .filter((msg) => msg && (msg.role === 'user' || msg.role === 'agent' || msg.role === 'system'))
+    .map((msg) => ({
+      id: String(msg.id || 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)),
+      role: msg.role,
+      content: normalizeText(msg.content),
+      time: msg.time || formatTime(Date.now()),
+      intent: msg.intent || '',
+    }))
+    .slice(-MAX_STORED_MESSAGES)
+}
+
 export default {
   name: 'AgentPage',
   components: {
+    uniIcons,
     mpHtml,
   },
   data() {
@@ -271,7 +338,7 @@ export default {
     }
   },
   created() {
-    this.conversationId = createConversationId()
+    this.restoreConversationState()
     this.userId = this.resolveUserId()
   },
   onShow() {
@@ -301,6 +368,68 @@ export default {
 
     renderMarkdown(content) {
       return normalizeMarkdownContent(content)
+    },
+
+    readConversationState() {
+      try {
+        const rawState = uni.getStorageSync(AGENT_CONVERSATION_STORAGE_KEY)
+        if (!rawState) {
+          return null
+        }
+
+        if (typeof rawState === 'string') {
+          try {
+            return JSON.parse(rawState)
+          } catch (e) {
+            return null
+          }
+        }
+
+        return rawState
+      } catch (e) {
+        return null
+      }
+    },
+
+    persistConversationState() {
+      if (!this.conversationId) {
+        return
+      }
+
+      const state = createConversationState(this.conversationId)
+      state.messages = normalizeStoredMessages(this.messages)
+      state.updatedAt = Date.now()
+
+      try {
+        uni.setStorageSync(AGENT_CONVERSATION_STORAGE_KEY, state)
+      } catch (e) {}
+    },
+
+    restoreConversationState() {
+      const storedState = this.readConversationState()
+      if (storedState && storedState.conversationId) {
+        this.conversationId = String(storedState.conversationId)
+        this.messages = normalizeStoredMessages(storedState.messages)
+        return
+      }
+
+      const freshState = createConversationState()
+      this.conversationId = freshState.conversationId
+      this.messages = []
+      this.persistConversationState()
+    },
+
+    resetConversationState() {
+      const freshState = createConversationState()
+      this.conversationId = freshState.conversationId
+      this.messages = []
+      this.pendingConfirmation = null
+      this.inputValue = ''
+      this.loading = false
+      this.streamingIndex = -1
+      this.scrollToId = ''
+      this.persistConversationState()
+      this.scrollToBottom()
     },
 
     resolveUserId() {
@@ -558,9 +687,45 @@ export default {
         case 'error':
           this.handleErrorFrame(frame)
           break
+        case 'step_start':
+          this.handleStepStartFrame(frame)
+          break
+        case 'step_done':
+          this.handleStepDoneFrame(frame)
+          break
+        case 'plan_complete':
+          this.handlePlanCompleteFrame(frame)
+          break
         default:
           console.warn('[Agent] Unknown frame type:', frame.type)
       }
+    },
+
+    handleStepStartFrame(frame) {
+      this.messages = this.messages.concat([{
+        id: 'step_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        role: 'system',
+        content: '🔄 步骤' + frame.step + '：' + intentLabel(frame.intent),
+        time: formatTime(Date.now()),
+      }])
+      this.loading = true
+      this.persistConversationState()
+      this.scrollToBottom()
+    },
+
+    handleStepDoneFrame(frame) {
+      console.log('[Agent][step_done]', '步骤' + frame.step, '完成')
+    },
+
+    handlePlanCompleteFrame(frame) {
+      this.messages = this.messages.concat([{
+        id: 'plan_done_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        role: 'system',
+        content: '✅ 已完成全部 ' + frame.steps + ' 个步骤',
+        time: formatTime(Date.now()),
+      }])
+      this.persistConversationState()
+      this.scrollToBottom()
     },
 
     handleTokenFrame(content, frame) {
@@ -579,6 +744,7 @@ export default {
 
         ensureAgentMessage(this, normalized)
         this.loading = true
+        this.persistConversationState()
         this.scrollToBottom()
         return
       }
@@ -587,18 +753,22 @@ export default {
       this.messages[this.streamingIndex].content = nextContent
       this.loading = true
       this.messages = this.messages.slice()
+      this.persistConversationState()
       this.scrollToBottom()
     },
 
     handleConfirmationFrame(frame) {
+      const rawIntent = frame.intent || ''
       this.pendingConfirmation = {
-        intent: frame.intent || '',
+        rawIntent,
+        intent: rawIntent === 'task_plan' ? '多步操作' : intentLabel(rawIntent) || rawIntent,
         orderId: frame.orderId || '',
         question: frame.question || '',
         reason: frame.reason || '',
       }
       this.loading = false
       this.streamingIndex = -1
+      this.persistConversationState()
       this.scrollToBottom()
     },
 
@@ -641,6 +811,7 @@ export default {
 
       this.loading = false
       this.streamingIndex = -1
+      this.persistConversationState()
       this.scrollToBottom()
     },
 
@@ -648,6 +819,7 @@ export default {
       this.loading = false
       this.streamingIndex = -1
       this.clearStopFallbackTimer()
+      this.persistConversationState()
     },
 
     handleErrorFrame(frame) {
@@ -659,6 +831,7 @@ export default {
       })
       this.loading = false
       this.streamingIndex = -1
+      this.persistConversationState()
     },
 
     handleSend() {
@@ -699,6 +872,7 @@ export default {
           this.loading = true
           this.streamingIndex = -1
           this.userId = userId
+          this.persistConversationState()
           this.scrollToBottom()
 
           const payload = {
@@ -716,6 +890,7 @@ export default {
                 duration: 2000,
               })
               this.loading = false
+              this.persistConversationState()
             },
           })
         })
@@ -746,11 +921,13 @@ export default {
           fail: () => {
             this.loading = false
             this.streamingIndex = -1
+            this.persistConversationState()
           },
         })
       } catch (e) {
         this.loading = false
         this.streamingIndex = -1
+        this.persistConversationState()
       }
 
       this.clearStopFallbackTimer()
@@ -786,17 +963,20 @@ export default {
 
       this.ensureAuthenticated()
         .then((userId) => {
+          this.addSystemMessage(SYSTEM_MESSAGES[pending.intent]?.confirm || '已确认操作，正在处理...')
+
           const payload = {
             conversationId: this.conversationId,
             userId: userId,
             confirmation: true,
-            intent: pending.intent,
+            intent: pending.rawIntent || pending.intent,
           }
 
           this.userId = userId
           this.pendingConfirmation = null
           this.loading = true
           this.streamingIndex = -1
+          this.persistConversationState()
 
           this.socketTask.send({
             data: JSON.stringify(payload),
@@ -807,6 +987,7 @@ export default {
                 duration: 2000,
               })
               this.loading = false
+              this.persistConversationState()
             },
           })
         })
@@ -820,11 +1001,52 @@ export default {
     },
 
     handleCancelConfirmation() {
+      const pending = this.pendingConfirmation
+      const pendingIntent = pending?.rawIntent || pending?.intent
+      if (pendingIntent) {
+        this.addSystemMessage(SYSTEM_MESSAGES[pendingIntent]?.cancel || '已放弃当前操作')
+      }
       this.pendingConfirmation = null
+      this.persistConversationState()
+      this.scrollToBottom()
+    },
+
+    addSystemMessage(content) {
+      this.messages = this.messages.concat([{
+        id: 'sys_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        role: 'system',
+        content,
+        time: formatTime(Date.now()),
+      }])
+    },
+
+    startNewConversation() {
+      if (this.loading) {
+        uni.showToast({
+          title: '当前会话正在生成中，请先停止后再新建',
+          icon: 'none',
+          duration: 2000,
+        })
+        return
+      }
+
+      this.resetConversationState()
+      uni.showToast({
+        title: '已开启新对话',
+        icon: 'none',
+        duration: 1500,
+      })
+    },
+
+    goMemoryManage() {
+      uni.navigateTo({
+        url: '/pages/memory/index',
+      })
     },
 
     handleBack() {
       this.manualClose = true
+      this.persistConversationState()
       this.closeWebSocket()
       uni.navigateBack()
     },
@@ -900,8 +1122,10 @@ export default {
 .nav-status {
   position: absolute;
   right: 30rpx;
+  top: 50%;
   display: flex;
   align-items: center;
+  transform: translateY(-50%);
 }
 
 .status-dot {
@@ -919,7 +1143,7 @@ export default {
 
 .msg-area {
   flex: 1;
-  padding: 140rpx 24rpx 24rpx;
+  padding: 176rpx 32rpx 24rpx;
 }
 
 .msg {
@@ -930,6 +1154,7 @@ export default {
 
 .msg.user {
   align-items: flex-end;
+  padding-right: 60rpx;
 }
 
 .msg.agent {
@@ -940,7 +1165,7 @@ export default {
   padding: 18rpx 26rpx;
   font-size: 28rpx;
   line-height: 1.5;
-  max-width: 80%;
+  max-width: 78%;
   word-break: break-word;
   white-space: pre-line;
 }
@@ -966,6 +1191,7 @@ export default {
   border-radius: 24rpx 24rpx 24rpx 8rpx;
 }
 
+
 .bubble.agent .agent-markdown {
   display: block;
   width: 100%;
@@ -975,6 +1201,18 @@ export default {
   font-size: 22rpx;
   color: #aaa;
   padding: 0 8rpx;
+}
+
+.msg.system {
+  align-items: center;
+  padding: 6rpx 0;
+}
+
+.system-msg {
+  font-size: 24rpx;
+  color: #999;
+  text-align: center;
+  line-height: 1.4;
 }
 
 .badge {
@@ -1065,8 +1303,54 @@ export default {
   background: #ffffff;
 }
 
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 58rpx;
+  padding: 0 12rpx 0 10rpx;
+  border-radius: 29rpx;
+  border: 1rpx solid #f2b79f;
+  background: #fffaf7;
+  color: #e95f3c;
+  margin-right: 10rpx;
+}
+
+.new-chat-btn__icon {
+  margin-right: 4rpx;
+  line-height: 1;
+}
+
+.new-chat-btn__text {
+  font-size: 22rpx;
+  line-height: 1;
+  color: #e95f3c;
+}
+
+.memory-btn {
+  flex-shrink: 0;
+  height: 58rpx;
+  padding: 0 18rpx;
+  border-radius: 29rpx;
+  border: 1rpx solid #f2b79f;
+  background: #ffffff;
+  color: #e95f3c;
+  margin-right: 10rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.memory-btn__text {
+  font-size: 22rpx;
+  line-height: 1;
+  color: #e95f3c;
+}
+
 .chat-input {
   flex: 1;
+  min-width: 0;
   border: 1px solid #ccc;
   border-radius: 36rpx;
   padding: 16rpx 26rpx;

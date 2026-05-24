@@ -246,9 +246,9 @@ export default {
 														)
 														// 保存商铺信息
 														_this.setShopInfo({
-															shopName: success.data.shopName,
-															shopAddress: success.data.shopAddress,
-															shopId: success.data.shopId,
+															shopName: success.data.shopName || _this.shopInfo().shopName,
+															shopAddress: success.data.shopAddress || _this.shopInfo().shopAddress,
+															shopId: success.data.shopId || _this.shopInfo().shopId || 'f3deb',
 														})
 														_this.setMerchantDisplayInfo({
 															shopId:
