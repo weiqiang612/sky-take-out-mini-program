@@ -824,8 +824,12 @@ export default {
 
     handleErrorFrame(frame) {
       this.clearStopFallbackTimer()
+      let msg = frame.message || '发生错误'
+      if (frame.retryAfterSeconds) {
+        msg = `请求过于频繁，请在 ${frame.retryAfterSeconds} 秒后再试`
+      }
       uni.showToast({
-        title: frame.message || '发生错误',
+        title: msg,
         icon: 'none',
         duration: 2000,
       })
